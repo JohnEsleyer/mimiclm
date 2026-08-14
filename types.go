@@ -1,9 +1,8 @@
 package main
 
-// Standard OpenAI Chat Completion Request
 type ChatMessage struct {
 	Role    string      `json:"role"`
-	Content interface{} `json:"content"` // String or Array of parts
+	Content interface{} `json:"content"`
 }
 
 type ChatCompletionRequest struct {
@@ -14,10 +13,11 @@ type ChatCompletionRequest struct {
 	Tools       interface{}   `json:"tools,omitempty"`
 }
 
-// Internal Pending Request structure
 type PendingRequest struct {
 	ID        string                `json:"id"`
 	Timestamp string                `json:"timestamp"`
+	Provider  string                `json:"provider"` // "OpenRouter", "OpenAI", "Anthropic", "Ollama"
+	Headers   map[string]string     `json:"headers"`
 	Payload   ChatCompletionRequest `json:"payload"`
 	RespChan  chan MockResponse     `json:"-"`
 }
@@ -27,9 +27,10 @@ type MockResponse struct {
 	Body       string
 }
 
-// Wails Data Transfer Object (Without Channel)
 type PendingRequestDTO struct {
 	ID        string                `json:"id"`
 	Timestamp string                `json:"timestamp"`
+	Provider  string                `json:"provider"`
+	Headers   map[string]string     `json:"headers"`
 	Payload   ChatCompletionRequest `json:"payload"`
 }

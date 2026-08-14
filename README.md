@@ -1,16 +1,21 @@
 # MimicLM
 
-**MimicLM** is a desktop tool for intercepting, inspecting, and mocking OpenAI-compatible HTTP API requests in real time. Built with **Go**, **Wails v2**, **React**, and **TypeScript**, MimicLM provides a local proxy server along with a desktop GUI to inspect incoming LLM requests and draft custom responses.
+**MimicLM** is a desktop tool for intercepting, inspecting, and mocking requests across multiple LLM API providers (**OpenRouter**, **OpenAI**, **Anthropic**, and **Ollama**). Built with **Go**, **Wails v2**, **React**, and **TypeScript**, MimicLM provides a local proxy server along with a desktop GUI to inspect incoming requests and draft provider-formatted mock responses in real time.
 
 ---
 
 ## Features
 
-- **OpenAI-Compatible HTTP Server**: Listens locally on `http://localhost:8080/v1` for `/v1/chat/completions` and `/v1/models`.
+- **Multi-Provider API Endpoints**:
+  - **OpenRouter**: `/api/v1/chat/completions` or `/v1/chat/completions` (`http://localhost:8080/api/v1`)
+  - **OpenAI**: `/v1/chat/completions` (`http://localhost:8080/v1`)
+  - **Anthropic**: `/v1/messages` (`http://localhost:8080/v1`)
+  - **Ollama**: `/api/chat` (`http://localhost:8080/api`)
+- **Automatic Provider Response Formatting**: Automatically wraps plain text responses into Anthropic (`/v1/messages`), Ollama (`/api/chat`), or OpenAI/OpenRouter (`/v1/chat/completions`) schemas.
+- **Provider & Header Detection**: Automatically detects OpenRouter requests via headers (`HTTP-Referer`, `X-Title`) or model slugs (`anthropic/claude-3.5-sonnet`).
 - **Blocking Request Queue**: Uses Go channels to block client HTTP requests until you manually respond or the client disconnects.
-- **High-Contrast Dark GUI**: Monochromatic, dark-themed React UI (Vercel/Linear-inspired) with custom popover dropdowns and monospaced code inspectors.
-- **Preset Templates & Status Selector**: Choose preset responses (text, JSON object, function/tool call) or custom HTTP status codes (`200 OK`, `429 Rate Limit`, `500 Internal Error`, `401 Unauthorized`).
-- **Auto-Formatting**: Automatically wraps plain text into standard OpenAI Chat Completion JSON format while preserving raw JSON responses.
+- **High-Contrast Dark GUI**: Monochromatic, dark-themed React UI with provider badges, header inspection, and custom popover dropdowns.
+- **Presets & Status Selector**: Choose provider presets or custom HTTP status codes (`200 OK`, `429 Rate Limit`, `500 Internal Error`).
 
 ---
 
@@ -18,13 +23,13 @@
 
 ```text
 mimic-lm/
-├── app.go          # Go Wails app struct, HTTP server handlers, and JS bindings
+├── app.go          # Multi-provider route handlers, response formatters, and Wails bindings
 ├── server.go       # In-memory thread-safe PendingRequest store
-├── types.go        # OpenAI request/response models & internal DTOs
+├── types.go        # Provider data models, header maps, and DTOs
 ├── main.go         # Application entry point & Wails startup configuration
 ├── frontend/       # React + TypeScript UI
 │   └── src/
-│       ├── App.tsx # Main GUI workspace with custom dropdowns & request queue
+│       ├── App.tsx # Multi-provider GUI with endpoint selector and request inspector
 │       └── ...
 └── README.md
 ```
@@ -41,7 +46,7 @@ mimic-lm/
 
 ### Installation & Setup
 
-1. **Clone the repository and navigate into the project directory:**
+1. **Navigate into the project directory:**
    ```bash
    cd mimic-lm
    ```
@@ -60,60 +65,41 @@ mimic-lm/
 
 ## Running MimicLM
 
-Start MimicLM in development mode with live reload:
+Start MimicLM in development mode:
 
 ```bash
 wails dev
 ```
 
-This launches the desktop GUI and starts the embedded HTTP proxy server listening on:
-```text
-http://localhost:8080/v1
-```
+This launches the desktop GUI and starts the embedded HTTP server listening on `http://localhost:8080`.
 
 ---
 
-## Usage Example
+## Usage Examples
 
-Point any client application or SDK using the OpenAI API to `http://localhost:8080/v1`.
-
-### Example 1: `curl`
+### OpenRouter (`curl`)
 
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:8080/api/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "HTTP-Referer: https://mytestapp.com" \
+  -H "X-Title: My Test App" \
   -d '{
-    "model": "gpt-4o",
-    "messages": [
-      {"role": "system", "content": "You are a helpful assistant."},
-      {"role": "user", "content": "Hello MimicLM!"}
-    ]
+    "model": "anthropic/claude-3.5-sonnet",
+    "messages": [{"role": "user", "content": "Test OpenRouter interception!"}]
   }'
 ```
 
-**Workflow:**
-1. The `curl` command will pause and await a server response.
-2. The **MimicLM** GUI immediately updates the **Pending Intercepts** queue with the incoming request.
-3. Select the request in the GUI to inspect payload messages.
-4. Draft your response (or pick a template) and click **SEND MOCK RESPONSE TO CLIENT ➔**.
-5. The `curl` command unblocks and receives the formatted response.
+### Anthropic (`curl`)
 
-### Example 2: Python OpenAI SDK
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8080/v1",
-    api_key="mock-key-not-needed"
-)
-
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Generate a mock user profile"}]
-)
-
-print(response.choices[0].message.content)
+```bash
+curl http://localhost:8080/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: mock-key" \
+  -d '{
+    "model": "claude-3-5-sonnet-20241022",
+    "messages": [{"role": "user", "content": "Hello Anthropic endpoint"}]
+  }'
 ```
 
 ---

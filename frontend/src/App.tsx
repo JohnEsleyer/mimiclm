@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 import { GetPendingRequests, ResolveRequest } from '../wailsjs/go/main/App';
 
-// --- TYPES ---
 interface ChatMessage {
   role: string;
   content: any;
@@ -11,6 +10,8 @@ interface ChatMessage {
 interface PendingRequest {
   id: string;
   timestamp: string;
+  provider: string; // "OpenRouter", "OpenAI", "Anthropic", "Ollama"
+  headers: Record<string, string>;
   payload: {
     model: string;
     messages: ChatMessage[];
@@ -25,45 +26,38 @@ interface DropdownOption {
   description?: string;
 }
 
-const ENDPOINT_BASE = "http://localhost:8080/v1";
+const PROVIDERS = [
+  { name: "OpenRouter", endpoint: "http://localhost:8080/api/v1" },
+  { name: "OpenAI", endpoint: "http://localhost:8080/v1" },
+  { name: "Anthropic", endpoint: "http://localhost:8080/v1" },
+  { name: "Ollama", endpoint: "http://localhost:8080/api" },
+];
 
 const TEMPLATES: DropdownOption[] = [
   { 
-    label: "Simple Text Response", 
+    label: "Standard Answer", 
     value: "Hello! I am MimicLM pretending to be an AI. How can I assist you today?",
-    description: "Standard text output wrapped in OpenAI format"
+    description: "Standard text output automatically formatted for target provider"
   },
   { 
-    label: "JSON Object Output", 
-    value: `{\n  "status": "success",\n  "data": {\n    "user_id": "usr_99182",\n    "role": "administrator",\n    "active": true\n  }\n}`,
-    description: "Pre-formatted JSON payload for testing schemas"
+    label: "OpenRouter / OpenAI Function Call", 
+    value: `{\n  "id": "gen-tool-123",\n  "object": "chat.completion",\n  "choices": [{\n    "message": {\n      "role": "assistant",\n      "tool_calls": [{\n        "id": "call_abc123",\n        "type": "function",\n        "function": {\n          "name": "get_weather",\n          "arguments": "{\\"location\\": \\"San Francisco, CA\\"}"\n        }\n      }]\n    },\n    "finish_reason": "tool_calls"\n  }]\n}`,
+    description: "Raw OpenAI/OpenRouter Tool Call Payload"
   },
   { 
-    label: "Tool / Function Call", 
-    value: `{\n  "id": "chatcmpl-tool-123",\n  "object": "chat.completion",\n  "choices": [{\n    "message": {\n      "role": "assistant",\n      "tool_calls": [{\n        "id": "call_abc123",\n        "type": "function",\n        "function": {\n          "name": "get_current_weather",\n          "arguments": "{\\"location\\": \\"San Francisco, CA\\"}"\n        }\n      }]\n    },\n    "finish_reason": "tool_calls"\n  }]\n}`,
-    description: "Simulates an LLM triggering a tool call"
+    label: "Anthropic Tool Use Response", 
+    value: `{\n  "id": "msg_013Zva2CMHL3A92M2fR2Y18W",\n  "type": "message",\n  "role": "assistant",\n  "content": [\n    {\n      "type": "tool_use",\n      "id": "toolu_01A09q90bc1",\n      "name": "get_weather",\n      "input": {"location": "San Francisco, CA"}\n    }\n  ],\n  "stop_reason": "tool_use"\n}`,
+    description: "Raw Anthropic Tool Use Payload"
   }
 ];
 
 const STATUS_CODES: DropdownOption[] = [
   { label: "200 OK", value: 200, description: "Normal successful completion" },
   { label: "429 Rate Limit Exceeded", value: 429, description: "Simulate API rate limiting" },
-  { label: "500 Internal Server Error", value: 500, description: "Simulate LLM backend failure" },
-  { label: "401 Unauthorized", value: 401, description: "Simulate invalid API key" },
+  { label: "500 Internal Server Error", value: 500, description: "Simulate provider failure" },
 ];
 
-// --- CUSTOM REUSABLE DROPDOWN COMPONENT ---
-function CustomDropdown({ 
-  options, 
-  value, 
-  onChange, 
-  placeholder = "Select an option..." 
-}: { 
-  options: DropdownOption[]; 
-  value: string | number; 
-  onChange: (val: any) => void; 
-  placeholder?: string;
-}) {
+function CustomDropdown({ options, value, onChange, placeholder = "Select..." }: { options: DropdownOption[]; value: string | number; onChange: (val: any) => void; placeholder?: string; }) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -71,9 +65,7 @@ function CustomDropdown({
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) setIsOpen(false);
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
@@ -81,7 +73,6 @@ function CustomDropdown({
 
   return (
     <div ref={dropdownRef} style={{ position: 'relative', minWidth: '180px' }}>
-      {/* Trigger Button */}
       <button
         onClick={() => setIsOpen(!isOpen)}
         style={{
@@ -96,30 +87,26 @@ function CustomDropdown({
           padding: '8px 12px',
           fontSize: '0.8rem',
           fontFamily: 'monospace',
-          cursor: 'pointer',
-          outline: 'none',
-          transition: 'all 0.15s ease'
+          cursor: 'pointer'
         }}
       >
         <span>{selectedOption ? selectedOption.label : placeholder}</span>
         <span style={{ fontSize: '0.65rem', marginLeft: '8px', opacity: 0.6 }}>{isOpen ? '▲' : '▼'}</span>
       </button>
 
-      {/* High-Contrast Dropdown Menu */}
       {isOpen && (
         <div style={{
           position: 'absolute',
           bottom: '100%',
           right: 0,
           marginBottom: '6px',
-          width: '260px',
-          backgroundColor: '#ffffff', // High-contrast popover background
-          color: '#000000',           // Dark text
+          width: '280px',
+          backgroundColor: '#ffffff',
+          color: '#000000',
           border: '1px solid #e4e4e7',
           borderRadius: '8px',
           boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5)',
           zIndex: 1000,
-          overflow: 'hidden',
           padding: '4px'
         }}>
           {options.map((opt) => {
@@ -127,31 +114,18 @@ function CustomDropdown({
             return (
               <div
                 key={opt.value}
-                onClick={() => {
-                  onChange(opt.value);
-                  setIsOpen(false);
-                }}
+                onClick={() => { onChange(opt.value); setIsOpen(false); }}
                 style={{
                   padding: '8px 10px',
                   borderRadius: '4px',
                   cursor: 'pointer',
                   backgroundColor: isSelected ? '#000000' : 'transparent',
                   color: isSelected ? '#ffffff' : '#000000',
-                  fontSize: '0.8rem',
-                  fontFamily: 'sans-serif',
-                  transition: 'background-color 0.1s ease'
+                  fontSize: '0.8rem'
                 }}
               >
                 <div style={{ fontWeight: '600' }}>{opt.label}</div>
-                {opt.description && (
-                  <div style={{ 
-                    fontSize: '0.7rem', 
-                    color: isSelected ? '#a1a1aa' : '#71717a', 
-                    marginTop: '2px' 
-                  }}>
-                    {opt.description}
-                  </div>
-                )}
+                {opt.description && <div style={{ fontSize: '0.7rem', color: isSelected ? '#a1a1aa' : '#71717a', marginTop: '2px' }}>{opt.description}</div>}
               </div>
             );
           })}
@@ -161,14 +135,13 @@ function CustomDropdown({
   );
 }
 
-// --- MAIN APP COMPONENT ---
 export default function App() {
   const [requests, setRequests] = useState<PendingRequest[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [responseInput, setResponseInput] = useState<string>(TEMPLATES[0].value as string);
   const [statusCode, setStatusCode] = useState<number>(200);
+  const [selectedProviderIndex, setSelectedProviderIndex] = useState(0);
   const [copied, setCopied] = useState(false);
-  const [showGuide, setShowGuide] = useState(false);
 
   const selectedReq = requests.find(r => r.id === selectedId);
 
@@ -189,8 +162,8 @@ export default function App() {
     });
   }, []);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(ENDPOINT_BASE);
+  const handleCopy = (url: string) => {
+    navigator.clipboard.writeText(url);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -203,109 +176,85 @@ export default function App() {
     setSelectedId(remaining.length > 0 ? remaining[0].id : null);
   };
 
+  const getProviderBadgeColor = (p: string) => {
+    switch(p) {
+      case 'OpenRouter': return '#f43f5e'; // Pink/Rose
+      case 'Anthropic': return '#d97706';  // Amber
+      case 'Ollama': return '#10b981';     // Emerald
+      default: return '#ffffff';          // OpenAI / Default
+    }
+  };
+
   return (
-    <div style={{ 
-      display: 'flex', 
-      height: '100vh', 
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', 
-      backgroundColor: '#09090b', 
-      color: '#f4f4f5',
-      letterSpacing: '-0.01em'
-    }}>
+    <div style={{ display: 'flex', height: '100vh', fontFamily: '-apple-system, sans-serif', backgroundColor: '#09090b', color: '#f4f4f5' }}>
       
       {/* Sidebar */}
-      <div style={{ 
-        width: '320px', 
-        borderRight: '1px solid #27272a', 
-        padding: '20px', 
-        display: 'flex', 
-        flexDirection: 'column',
-        backgroundColor: '#000000'
-      }}>
+      <div style={{ width: '320px', borderRight: '1px solid #27272a', padding: '20px', display: 'flex', flexDirection: 'column', backgroundColor: '#000000' }}>
         
-        {/* App Title */}
+        {/* Logo */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <div style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#ffffff' }}></div>
-            <h1 style={{ fontSize: '0.95rem', fontWeight: '700', color: '#ffffff', margin: 0, letterSpacing: '0.05em' }}>
-              MIMIC<span style={{ color: '#71717a' }}>LM</span>
-            </h1>
+            <h1 style={{ fontSize: '0.95rem', fontWeight: '700', color: '#ffffff', margin: 0 }}>MIMIC<span style={{ color: '#71717a' }}>LM</span></h1>
           </div>
-          <span style={{ fontSize: '0.65rem', border: '1px solid #27272a', padding: '2px 6px', borderRadius: '4px', color: '#a1a1aa', fontFamily: 'monospace' }}>
-            v1.0.0
-          </span>
+          <span style={{ fontSize: '0.65rem', border: '1px solid #27272a', padding: '2px 6px', borderRadius: '4px', color: '#a1a1aa' }}>MULTI-PROVIDER</span>
         </div>
 
-        {/* --- ENDPOINT CARD --- */}
-        <div style={{
-          backgroundColor: '#09090b',
-          border: '1px solid #27272a',
-          borderRadius: '8px',
-          padding: '12px',
-          marginBottom: '20px'
-        }}>
-          <div style={{ fontSize: '0.65rem', color: '#71717a', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
-            Target API Base URL
+        {/* Multi-Provider Endpoints Selector */}
+        <div style={{ backgroundColor: '#09090b', border: '1px solid #27272a', borderRadius: '8px', padding: '12px', marginBottom: '20px' }}>
+          <div style={{ fontSize: '0.65rem', color: '#71717a', fontWeight: '600', textTransform: 'uppercase', marginBottom: '8px' }}>
+            Target Endpoint Selector
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-            <code style={{ fontSize: '0.75rem', color: '#ffffff', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-              {ENDPOINT_BASE}
+          <div style={{ display: 'flex', gap: '4px', marginBottom: '10px', flexWrap: 'wrap' }}>
+            {PROVIDERS.map((p, idx) => (
+              <button
+                key={p.name}
+                onClick={() => setSelectedProviderIndex(idx)}
+                style={{
+                  backgroundColor: selectedProviderIndex === idx ? '#ffffff' : '#18181b',
+                  color: selectedProviderIndex === idx ? '#000000' : '#a1a1aa',
+                  border: '1px solid #27272a',
+                  borderRadius: '4px',
+                  padding: '4px 8px',
+                  fontSize: '0.65rem',
+                  fontWeight: '600',
+                  cursor: 'pointer'
+                }}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <code style={{ fontSize: '0.75rem', color: '#ffffff', fontFamily: 'monospace' }}>
+              {PROVIDERS[selectedProviderIndex].endpoint}
             </code>
             <button 
-              onClick={handleCopy}
-              style={{
-                backgroundColor: copied ? '#ffffff' : '#18182b',
-                color: copied ? '#000000' : '#ffffff',
-                border: '1px solid #27272a',
-                borderRadius: '4px',
-                padding: '4px 8px',
-                fontSize: '0.65rem',
-                cursor: 'pointer',
-                fontWeight: '600',
-                transition: 'all 0.15s ease'
-              }}
+              onClick={() => handleCopy(PROVIDERS[selectedProviderIndex].endpoint)}
+              style={{ backgroundColor: copied ? '#ffffff' : '#18181b', color: copied ? '#000000' : '#ffffff', border: '1px solid #27272a', borderRadius: '4px', padding: '4px 8px', fontSize: '0.65rem', cursor: 'pointer', fontWeight: '600' }}
             >
               {copied ? 'COPIED' : 'COPY'}
             </button>
           </div>
-          <button 
-            onClick={() => setShowGuide(!showGuide)}
-            style={{ marginTop: '10px', background: 'none', border: 'none', color: '#a1a1aa', fontSize: '0.7rem', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
-          >
-            {showGuide ? 'Hide integration code' : 'View integration code'}
-          </button>
         </div>
-
-        {/* Integration Code Helper */}
-        {showGuide && (
-          <div style={{ backgroundColor: '#09090b', padding: '10px', borderRadius: '6px', fontSize: '0.7rem', marginBottom: '20px', border: '1px solid #27272a', fontFamily: 'monospace' }}>
-            <div style={{ color: '#71717a', marginBottom: '4px' }}># Python OpenAI SDK</div>
-            <div style={{ color: '#a1a1aa', whiteSpace: 'pre-wrap' }}>
-              client = OpenAI(<br/>
-              &nbsp;&nbsp;base_url="{ENDPOINT_BASE}",<br/>
-              &nbsp;&nbsp;api_key="mock"<br/>
-              )
-            </div>
-          </div>
-        )}
 
         {/* Queue Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '12px', color: '#71717a', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '12px', color: '#71717a', fontWeight: '600', textTransform: 'uppercase' }}>
           <span>Pending Intercepts</span>
-          <span style={{ backgroundColor: '#18182b', padding: '2px 6px', borderRadius: '10px', color: '#ffffff' }}>
-            {requests.length}
-          </span>
+          <span style={{ backgroundColor: '#18181b', padding: '2px 6px', borderRadius: '10px', color: '#ffffff' }}>{requests.length}</span>
         </div>
 
-        {/* Request List */}
+        {/* Request Queue */}
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
           {requests.length === 0 ? (
             <div style={{ padding: '30px 10px', color: '#3f3f46', fontSize: '0.8rem', textAlign: 'center', border: '1px dashed #18181b', borderRadius: '8px' }}>
-              Listening for outgoing API requests...
+              Waiting for provider API calls...
             </div>
           ) : (
             requests.map(req => {
               const isActive = selectedId === req.id;
+              const badgeColor = getProviderBadgeColor(req.provider);
               return (
                 <div
                   key={req.id}
@@ -315,20 +264,17 @@ export default function App() {
                     borderRadius: '6px',
                     cursor: 'pointer',
                     backgroundColor: isActive ? '#18181b' : '#09090b',
-                    border: isActive ? '1px solid #52525b' : '1px solid #18181b',
-                    transition: 'all 0.15s ease'
+                    border: isActive ? '1px solid #52525b' : '1px solid #18181b'
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '0.8rem', fontWeight: '600', color: isActive ? '#ffffff' : '#a1a1aa' }}>
-                      {req.payload.model || 'gpt-4o'}
+                    <span style={{ fontSize: '0.65rem', fontWeight: '700', padding: '2px 6px', borderRadius: '3px', backgroundColor: '#000000', color: badgeColor, border: `1px solid ${badgeColor}` }}>
+                      {req.provider}
                     </span>
-                    <span style={{ fontSize: '0.65rem', color: '#52525b', fontFamily: 'monospace' }}>
-                      {req.timestamp}
-                    </span>
+                    <span style={{ fontSize: '0.65rem', color: '#52525b', fontFamily: 'monospace' }}>{req.timestamp}</span>
                   </div>
-                  <div style={{ fontSize: '0.75rem', color: '#71717a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {req.payload.messages?.length || 0} messages in payload
+                  <div style={{ fontSize: '0.8rem', fontWeight: '600', color: '#ffffff', marginTop: '4px' }}>
+                    {req.payload.model || 'default-model'}
                   </div>
                 </div>
               );
@@ -341,48 +287,30 @@ export default function App() {
       {selectedReq ? (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '24px', gap: '20px', overflowY: 'auto' }}>
           
-          {/* Top Panel: Incoming Request Inspector */}
+          {/* Top Panel: Inspector */}
           <div style={{ backgroundColor: '#000000', borderRadius: '8px', padding: '16px', border: '1px solid #27272a' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Payload Inspector — {selectedReq.payload.model}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: '600', color: '#ffffff', textTransform: 'uppercase' }}>
+                  {selectedReq.provider} Payload Inspector
+                </span>
+                {selectedReq.headers['HTTP-Referer'] && (
+                  <span style={{ fontSize: '0.65rem', color: '#f43f5e', border: '1px solid #f43f5e', padding: '1px 6px', borderRadius: '4px' }}>
+                    App: {selectedReq.headers['X-Title'] || selectedReq.headers['HTTP-Referer']}
+                  </span>
+                )}
               </div>
-              <div style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#52525b' }}>
-                ID: {selectedReq.id}
-              </div>
+              <div style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#52525b' }}>Model: {selectedReq.payload.model}</div>
             </div>
 
-            {/* Message History Feed */}
-            <div style={{ maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {/* Messages */}
+            <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {selectedReq.payload.messages?.map((msg, idx) => (
-                <div 
-                  key={idx} 
-                  style={{ 
-                    fontSize: '0.8rem', 
-                    padding: '10px 12px', 
-                    borderRadius: '6px', 
-                    backgroundColor: '#09090b',
-                    border: '1px solid #18181b',
-                    fontFamily: 'monospace',
-                    lineHeight: '1.4'
-                  }}
-                >
-                  <span style={{ 
-                    display: 'inline-block',
-                    fontSize: '0.65rem',
-                    fontWeight: '700',
-                    textTransform: 'uppercase',
-                    padding: '2px 6px',
-                    borderRadius: '3px',
-                    marginRight: '8px',
-                    backgroundColor: msg.role === 'system' ? '#27272a' : msg.role === 'user' ? '#ffffff' : '#3f3f46',
-                    color: msg.role === 'user' ? '#000000' : '#ffffff'
-                  }}>
-                    {msg.role}
-                  </span>
-                  <span style={{ color: '#d4d4d8' }}>
-                    {typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
-                  </span>
+                <div key={idx} style={{ fontSize: '0.8rem', padding: '10px', borderRadius: '6px', backgroundColor: '#09090b', border: '1px solid #18181b', fontFamily: 'monospace' }}>
+                  <strong style={{ color: msg.role === 'user' ? '#ffffff' : '#a1a1aa', textTransform: 'uppercase', marginRight: '8px' }}>
+                    {msg.role}:
+                  </strong>
+                  <span style={{ color: '#d4d4d8' }}>{typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}</span>
                 </div>
               ))}
             </div>
@@ -391,31 +319,20 @@ export default function App() {
           {/* Bottom Panel: Response Composer */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Draft Response Output
+              <div style={{ fontSize: '0.75rem', fontWeight: '600', color: '#ffffff', textTransform: 'uppercase' }}>
+                Mock Response Output ({selectedReq.provider} Auto-Format)
               </div>
               
-              {/* Custom Dropdowns */}
               <div style={{ display: 'flex', gap: '10px' }}>
-                <CustomDropdown
-                  options={TEMPLATES}
-                  value={responseInput}
-                  onChange={(val) => setResponseInput(val)}
-                  placeholder="Load Template..."
-                />
-                <CustomDropdown
-                  options={STATUS_CODES}
-                  value={statusCode}
-                  onChange={(val) => setStatusCode(Number(val))}
-                />
+                <CustomDropdown options={TEMPLATES} value={responseInput} onChange={(val) => setResponseInput(val)} placeholder="Presets..." />
+                <CustomDropdown options={STATUS_CODES} value={statusCode} onChange={(val) => setStatusCode(Number(val))} />
               </div>
             </div>
 
-            {/* Editor Area */}
             <textarea
               value={responseInput}
               onChange={(e) => setResponseInput(e.target.value)}
-              placeholder="Type your pretend LLM response or raw JSON payload here..."
+              placeholder="Type your mock LLM response text or raw JSON payload here..."
               style={{
                 flex: 1,
                 minHeight: '220px',
@@ -424,7 +341,7 @@ export default function App() {
                 border: '1px solid #27272a',
                 borderRadius: '8px',
                 padding: '16px',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                fontFamily: 'monospace',
                 fontSize: '0.85rem',
                 lineHeight: '1.5',
                 resize: 'none',
@@ -432,7 +349,6 @@ export default function App() {
               }}
             />
 
-            {/* Stark White Primary Action Button */}
             <button
               onClick={handleSend}
               style={{
@@ -443,26 +359,16 @@ export default function App() {
                 borderRadius: '6px',
                 fontWeight: '700',
                 cursor: 'pointer',
-                fontSize: '0.85rem',
-                letterSpacing: '0.02em',
-                transition: 'opacity 0.15s ease'
+                fontSize: '0.85rem'
               }}
-              onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
-              onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
             >
-              SEND MOCK RESPONSE TO CLIENT ➔
+              SEND MOCK RESPONSE TO {selectedReq.provider.toUpperCase()} CLIENT ➔
             </button>
           </div>
         </div>
       ) : (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#52525b', gap: '12px' }}>
-          <div style={{ width: '40px', height: '40px', borderRadius: '50%', border: '1px solid #27272a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', color: '#a1a1aa' }}>
-            ⚡
-          </div>
-          <div style={{ fontSize: '0.9rem', color: '#a1a1aa' }}>Waiting for incoming API requests...</div>
-          <div style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: '#52525b' }}>
-            Target: {ENDPOINT_BASE}/chat/completions
-          </div>
+          <div style={{ fontSize: '0.9rem', color: '#a1a1aa' }}>Listening for OpenRouter, OpenAI, Anthropic, or Ollama requests...</div>
         </div>
       )}
     </div>

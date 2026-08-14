@@ -56,6 +56,8 @@ export namespace main {
 	export class PendingRequestDTO {
 	    id: string;
 	    timestamp: string;
+	    provider: string;
+	    headers: Record<string, string>;
 	    payload: ChatCompletionRequest;
 	
 	    static createFrom(source: any = {}) {
@@ -66,6 +68,8 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.timestamp = source["timestamp"];
+	        this.provider = source["provider"];
+	        this.headers = source["headers"];
 	        this.payload = this.convertValues(source["payload"], ChatCompletionRequest);
 	    }
 	
